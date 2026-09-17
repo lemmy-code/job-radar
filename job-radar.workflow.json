@@ -1,0 +1,392 @@
+{
+  "name": "job-radar",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 12
+            }
+          ]
+        }
+      },
+      "id": "a1",
+      "name": "Every 12h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://remotive.com/api/remote-jobs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "category",
+              "value": "software-dev"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2",
+      "name": "Remotive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://remoteok.com/api",
+        "options": {}
+      },
+      "id": "a3",
+      "name": "RemoteOK",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise both feeds into one shape, then score against a profile.\n// Profile: Node/TypeScript backend, AI/LLM integration, remote-from-Serbia or Novi Sad/Belgrade.\nconst PROFILE = {\n  // Must read as an engineering seat before anything else counts.\n  titleGate: /\\b(developer|engineer|programmer|architect)\\b/i,\n  stack:   [/\\bnode(\\.js)?\\b/i, /typescript/i, /backend|back-end/i, /postgres/i, /\\baws\\b|azure/i, /\\bllm\\b|\\bmcp\\b|agentic|gen(erative)?\\s*ai|ai[- ](engineer|integration|native|agent)/i, /react|next\\.js/i, /full[- ]?stack/i],\n  geoGood: [/anywhere|worldwide|global/i, /europe|emea|\\bcet\\b/i, /serbia|belgrade|novi sad/i],\n  // Title-level: roles that are not an individual-contributor backend seat.\n  titleBlock: [/\\b(manager|lead|head|director|principal|staff|vp|cto)\\b/i, /\\b(ios|android|mobile|qa|devops|sre|data engineer|ml engineer)\\b/i, /\\b(java|c#|\\.net|golang|\\bgo\\b|php|ruby|python)\\b(?!script)/i],\n  // Body-level hard blockers: years bars he cannot meet, residency clauses.\n  bodyBlock: [/\\b([5-9]|1\\d)\\+?\\s*(years|yrs)\\b[^.]{0,40}\\b(experience|exp)\\b/i, /\\bus[- ]only\\b|united states only|must be (located|based) in the (us|eu)\\b/i, /eu[- ]based candidates|eligible to work in the eu/i],\n};\nfunction score(title, text) {\n  const why = [];\n  if (!PROFILE.titleGate.test(title)) return { s: 0, why: 'not an engineering title' };\n  for (const b of PROFILE.titleBlock) if (b.test(title)) return { s: 0, why: 'title-blocked' };\n  for (const b of PROFILE.bodyBlock)  if (b.test(text))  return { s: 0, why: 'blocked: ' + b.source.slice(0, 25) };\n  let s = 0;\n  for (const r of PROFILE.stack)   if (r.test(text)) { s += 15; why.push(r.source.replace(/\\\\b/g,'').slice(0, 14)); }\n  for (const g of PROFILE.geoGood) if (g.test(text)) { s += 10; why.push('geo:' + g.source.slice(0, 12)); }\n  if (/\\b(senior|sr\\.?)\\b/i.test(title)) s -= 10;           // apply anyway, rank lower\n  return { s, why: why.join(', ') };\n}\nconst strip = h => (h || '').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ');\nconst out = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  if (Array.isArray(d.jobs) && d.jobs[0] && d.jobs[0].jobTitle) {   // Jobicy\n    for (const j of d.jobs) out.push({ source: 'jobicy', title: j.jobTitle, company: j.companyName, url: j.url,\n      location: j.jobGeo, posted: j.pubDate, text: `${j.jobTitle} ${j.companyName} ${j.jobGeo} ${strip(j.jobDescription)}` });\n  } else if (Array.isArray(d.jobs)) {             // Remotive\n    for (const j of d.jobs) out.push({ source: 'remotive', title: j.title, company: j.company_name, url: j.url,\n      location: j.candidate_required_location, posted: j.publication_date,\n      text: `${j.title} ${j.company_name} ${j.candidate_required_location} ${strip(j.description)}` });\n  } else if (d.position) {                        // RemoteOK (first row is a legal notice with no position)\n    out.push({ source: 'remoteok', title: d.position, company: d.company, url: d.url, location: d.location, posted: d.date,\n      text: `${d.position} ${d.company} ${d.location} ${(d.tags || []).join(' ')} ${strip(d.description)}` });\n  }\n}\nconst seen = new Set();\nreturn out\n  .filter(j => j.title && !seen.has(j.url) && seen.add(j.url))\n  .map(j => { const { s, why } = score(j.title, j.text); const { text, ...rest } = j; return { json: { ...rest, score: s, why } }; })\n  .filter(j => j.json.score >= 30)\n  .sort((a, b) => b.json.score - a.json.score)\n  .slice(0, 15);"
+      },
+      "id": "a4",
+      "name": "Normalise + score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You screen job postings for a backend engineer (Node.js/TypeScript, Azure/AWS, Postgres, LLM integrations incl. MCP servers; 4+ years hands-on, 3 professional; based in Serbia, remote or Novi Sad/Belgrade). For each posting below write ONE line: `- [score] Title \u2014 Company: fit in \u226412 words | gap in \u22648 words`. No preamble.\n\n{{ $json.digest }}"
+      },
+      "id": "a5",
+      "name": "Summarise top matches",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-5",
+        "options": {}
+      },
+      "id": "a6",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1040,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst digest = rows.map(j => `- [${j.score}] ${j.title} \u2014 ${j.company} (${j.location || 'remote'}) ${j.url} \u2014 ${j.why}`).join('\\n');\nreturn [{ json: { count: rows.length, digest } }];"
+      },
+      "id": "a7",
+      "name": "Build digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "=job-radar: {{ $('Build digest').item.json.count }} matches",
+        "emailType": "text",
+        "message": "={{ $json.text }}\n\n---\n{{ $('Build digest').item.json.digest }}",
+        "options": {}
+      },
+      "id": "a8",
+      "name": "Gmail draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "path": "job-radar"
+      },
+      "id": "b1",
+      "name": "MCP Server Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "typeVersion": 2,
+      "position": [
+        0,
+        800
+      ],
+      "webhookId": "4177c389-e015-4301-b3b3-0739754e29b6"
+    },
+    {
+      "parameters": {
+        "name": "search_remote_jobs",
+        "description": "Search current remote software jobs on Remotive by keyword (e.g. 'node.js', 'typescript backend'). Returns title, company, location requirement and URL for up to 20 matches.",
+        "method": "GET",
+        "url": "https://remotive.com/api/remote-jobs",
+        "sendQuery": true,
+        "parametersQuery": {
+          "values": [
+            {
+              "name": "search",
+              "valueProvider": "modelRequired"
+            },
+            {
+              "name": "limit",
+              "valueProvider": "fieldValue",
+              "value": "20"
+            }
+          ]
+        },
+        "optimizeResponse": true,
+        "responseType": "json",
+        "dataField": "jobs",
+        "fieldsToInclude": "selected",
+        "fields": "title,company_name,candidate_required_location,url,publication_date"
+      },
+      "id": "b2",
+      "name": "search_remote_jobs",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        300,
+        1000
+      ]
+    },
+    {
+      "parameters": {
+        "name": "latest_remoteok_jobs",
+        "description": "Fetch the latest remote jobs from RemoteOK, optionally filtered by a tag such as 'node', 'typescript', 'backend'. Returns position, company, location and URL.",
+        "method": "GET",
+        "url": "https://remoteok.com/api",
+        "optimizeResponse": true,
+        "responseType": "json",
+        "fieldsToInclude": "selected",
+        "fields": "position,company,location,url,tags,date"
+      },
+      "id": "b3",
+      "name": "latest_remoteok_jobs",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        560,
+        1000
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://jobicy.com/api/v2/remote-jobs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "count",
+              "value": "50"
+            },
+            {
+              "name": "tag",
+              "value": "node"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a9",
+      "name": "Jobicy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        600
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a0",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Every 12h": {
+      "main": [
+        [
+          {
+            "node": "Remotive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RemoteOK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Jobicy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remotive": {
+      "main": [
+        [
+          {
+            "node": "Normalise + score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RemoteOK": {
+      "main": [
+        [
+          {
+            "node": "Normalise + score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise + score": {
+      "main": [
+        [
+          {
+            "node": "Build digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build digest": {
+      "main": [
+        [
+          {
+            "node": "Summarise top matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarise top matches": {
+      "main": [
+        [
+          {
+            "node": "Gmail draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarise top matches",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "search_remote_jobs": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Server Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "latest_remoteok_jobs": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Server Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jobicy": {
+      "main": [
+        [
+          {
+            "node": "Normalise + score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Remotive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RemoteOK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Jobicy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": true,
+  "id": "jobradar0001"
+}

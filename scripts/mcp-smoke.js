@@ -31,8 +31,8 @@ async function rpc(body) {
   assert.ok(b.score === 0 && /blocked/.test(b.why), 'score_job blocked case: ' + JSON.stringify(b));
   // top_jobs: live ranked list, every row above the threshold, sorted.
   const top = await rpc({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'top_jobs', arguments: { min_score: 60 } } });
-  const list = JSON.parse(top.json.result.content[0].text)[0].data;
-  assert.ok(list.length > 0, 'top_jobs returned nothing');
-  for (let i = 0; i < list.length; i++) { assert.ok(list[i].score >= 60); if (i) assert.ok(list[i - 1].score >= list[i].score); }
-  console.log(`mcp OK — tools: ${names.join(', ')}; score_job good=${g.score} blocked=${b.score}; top_jobs(60) → ${list.length} rows, top [${list[0].score}] ${list[0].title}`);
+  const ranked = JSON.parse(top.json.result.content[0].text)[0].data;
+  assert.ok(ranked.length > 0, "top_jobs returned nothing");
+  for (let i = 0; i < ranked.length; i++) { assert.ok(ranked[i].score >= 60); if (i) assert.ok(ranked[i - 1].score >= ranked[i].score); }
+  console.log(`mcp OK — tools: ${names.join(', ')}; score_job good=${g.score} blocked=${b.score}; top_jobs(60) → ${ranked.length} rows, top [${ranked[0].score}] ${ranked[0].title}`);
 })().catch((e) => { console.error('mcp FAILED:', e.message); process.exit(1); });

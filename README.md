@@ -10,8 +10,9 @@ Run manually ───┤             ├─▶ Normalise + score ─▶ Build d
                 ├─ RemoteOK ──┤
                 └─ Jobicy ────┘
 
-MCP Server Trigger  ──▶  tools: search_remote_jobs(search) · latest_remoteok_jobs()
-   http://localhost:5678/mcp/job-radar   (Streamable HTTP, MCP 2025-03-26)
+MCP Server Trigger  ──▶  tools: top_jobs(min_score) · score_job(title, description)
+   http://localhost:5678/mcp/job-radar          search_remote_jobs(search) · latest_remoteok_jobs()
+   (Streamable HTTP, MCP 2025-03-26)   top_jobs / score_job call two sub-workflows (job-radar-top / job-radar-score)
 ```
 
 ## What it does
@@ -27,15 +28,38 @@ MCP Server Trigger  ──▶  tools: search_remote_jobs(search) · latest_remot
    *fit in ≤12 words | gap in ≤8 words*. Optional — the workflow runs without it.
 5. **Gmail draft** — creates a draft, never sends. Optional credential.
 6. **MCP Server Trigger** — the same workflow is an MCP server. Any MCP client (Claude Code,
-   Claude Desktop, Cursor…) can call `search_remote_jobs` and `latest_remoteok_jobs` live.
+   Claude Desktop, Cursor…) gets four tools:
+   - `top_jobs(min_score)` — runs fetch → score and returns the ranked list with `why`
+   - `score_job(title, description)` — paste any posting, get `{score, why, verdict}`
+   - `search_remote_jobs(search)` / `latest_remoteok_jobs()` — raw feed access
+   The two scored tools are sub-workflows (`job-radar-top.workflow.json`, `job-radar-score.workflow.json`)
+   called through *Call n8n Workflow Tool*, so the assistant sees a small, typed interface and never the
+   feeds' raw shapes.
 
 ## Run it
 
 ```bash
 npm install -g n8n            # Node 20/22 (isolated-vm does not build on Node 25)
-n8n import:workflow --input=job-radar.workflow.json
-n8n update:workflow --id jobradar0001 --active=true
+for f in job-radar-score job-radar-top job-radar; do n8n import:workflow --input=$f.workflow.json; done
+for id in jobradarscore jobradartop00 jobradar0001; do n8n update:workflow --id $id --active=true; done
 n8n start                      # editor at http://localhost:5678
+```
+
+## Tests
+
+```bash
+npm test                 # unit: src/scorer.js — blockers, gates, ranking, feed normalisation (node:test)
+npm run test:integration # runs the real workflow via `n8n execute` against the live feeds
+npm run test:mcp         # initialize → tools/list → tools/call on the running MCP server
+npm run build            # re-inject src/scorer.js into the workflow JSON (CI checks it is in sync)
+```
+
+Example, straight over the protocol:
+```
+score_job("Medior Cloud Developer (AI Integrations)", <Bosch ad text>)
+→ { score: 70, why: "node, typescript, backend, llm|mcp, geo:serbia", verdict: "worth a look" }
+score_job("Senior Java Engineer", "8+ years of experience. US only.")
+→ { score: 0, why: "title-blocked: java|c#|.net|…", verdict: "skip" }
 ```
 
 Optional credentials (in the n8n UI): **Anthropic** on "Anthropic Chat Model", **Gmail OAuth2** on

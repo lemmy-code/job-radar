@@ -1,0 +1,12 @@
+name: test
+on: [push, pull_request]
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm test
+      - name: workflow JSON is in sync with src/scorer.js
+        run: node scripts/build.js && git diff --exit-code job-radar.workflow.json

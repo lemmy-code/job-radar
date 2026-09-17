@@ -1,0 +1,60 @@
+{
+  "id": "jobradarscore",
+  "name": "job-radar: score_job",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "title",
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "s1",
+      "name": "When called by a tool",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pure scoring logic \u2014 no n8n dependencies, so it can be unit-tested and reused.\n// The n8n Code node body is generated from this file by scripts/build.js.\n\nconst PROFILE = {\n  // Must read as an engineering seat before anything else counts.\n  titleGate: /\\b(developer|engineer|programmer|architect)\\b/i,\n  stack: [/\\bnode(\\.js)?\\b/i, /typescript/i, /backend|back-end/i, /postgres/i, /\\baws\\b|azure/i,\n    /\\bllm\\b|\\bmcp\\b|agentic|gen(erative)?\\s*ai|ai[- ](engineer|integration|native|agent)/i, /react|next\\.js/i, /full[- ]?stack/i],\n  geoGood: [/anywhere|worldwide|global/i, /europe|emea|\\bcet\\b/i, /serbia|belgrade|novi sad/i],\n  // Title-level: roles that are not an individual-contributor backend seat.\n  titleBlock: [/\\b(manager|lead|head|director|principal|staff|vp|cto)\\b/i,\n    /\\b(ios|android|mobile|qa|devops|sre|data engineer|ml engineer)\\b/i,\n    /\\b(java|c#|\\.net|golang|go|php|ruby|python)\\b(?!script)/i],\n  // Body-level hard blockers: years bars the profile cannot meet, residency clauses.\n  bodyBlock: [/\\b([5-9]|1\\d)\\+?\\s*(years|yrs)\\b[^.]{0,40}\\b(experience|exp)\\b/i,\n    /\\bus[- ]only\\b|united states only|must be (located|based) in the (us|eu)\\b/i,\n    /eu[- ]based candidates|eligible to work in the eu/i],\n  minScore: 30,\n  topN: 15,\n};\n\nconst strip = (h) => (h || '').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ');\n\nfunction score(title, text) {\n  if (!PROFILE.titleGate.test(title)) return { s: 0, why: 'not an engineering title' };\n  for (const b of PROFILE.titleBlock) if (b.test(title)) return { s: 0, why: 'title-blocked: ' + b.source.slice(0, 25) };\n  for (const b of PROFILE.bodyBlock) if (b.test(text)) return { s: 0, why: 'blocked: ' + b.source.slice(0, 25) };\n  let s = 0; const why = [];\n  for (const r of PROFILE.stack) if (r.test(text)) { s += 15; why.push(r.source.replace(/\\\\b/g, '').slice(0, 14)); }\n  for (const g of PROFILE.geoGood) if (g.test(text)) { s += 10; why.push('geo:' + g.source.slice(0, 12)); }\n  if (/\\b(senior|sr\\.?)\\b/i.test(title)) s -= 10; // apply anyway, rank lower\n  return { s, why: why.join(', ') };\n}\n\n// One shape for every feed. Each feed is recognised by its own fields.\nfunction normalise(json) {\n  const out = [];\n  if (Array.isArray(json.jobs) && json.jobs[0] && json.jobs[0].jobTitle) { // Jobicy\n    for (const j of json.jobs) out.push({ source: 'jobicy', title: j.jobTitle, company: j.companyName, url: j.url,\n      location: j.jobGeo, posted: j.pubDate, text: `${j.jobTitle} ${j.companyName} ${j.jobGeo} ${strip(j.jobDescription)}` });\n  } else if (Array.isArray(json.jobs)) {                                    // Remotive\n    for (const j of json.jobs) out.push({ source: 'remotive', title: j.title, company: j.company_name, url: j.url,\n      location: j.candidate_required_location, posted: j.publication_date,\n      text: `${j.title} ${j.company_name} ${j.candidate_required_location} ${strip(j.description)}` });\n  } else if (json.position) {                                               // RemoteOK (row 0 is a legal notice)\n    out.push({ source: 'remoteok', title: json.position, company: json.company, url: json.url, location: json.location,\n      posted: json.date, text: `${json.position} ${json.company} ${json.location} ${(json.tags || []).join(' ')} ${strip(json.description)}` });\n  }\n  return out;\n}\n\nfunction rank(jobs) {\n  const seen = new Set();\n  return jobs\n    .filter((j) => j.title && j.url && !seen.has(j.url) && seen.add(j.url))\n    .map((j) => { const { s, why } = score(j.title, j.text); const { text, ...rest } = j; return { ...rest, score: s, why }; })\n    .filter((j) => j.score >= PROFILE.minScore)\n    .sort((a, b) => b.score - a.score)\n    .slice(0, PROFILE.topN);\n}\n\n\n// ---- n8n Code node body (score one posting) ----\nconst { title = '', description = '' } = $input.first().json;\nconst { s, why } = score(String(title), `${title} ${strip(String(description))}`);\nreturn [{ json: { title, score: s, why, verdict: s >= PROFILE.minScore ? 'worth a look' : 'skip' } }];\n"
+      },
+      "id": "s2",
+      "name": "Score one posting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "When called by a tool": {
+      "main": [
+        [
+          {
+            "node": "Score one posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
